@@ -9,7 +9,7 @@
 | Họ và tên       | [Họ và tên]  |
 | MSSV            | [MSSV]       |
 | Khóa/Lớp        | [K4]         |
-| Vai trò chính   | [Vai trò]    |
+| Vai trò chính   | Verifier, trace, tài liệu và đóng gói |
 | Ngày hoàn thành | [YYYY-MM-DD] |
 
 ## 2. Vai trò và phạm vi công việc
@@ -97,11 +97,11 @@ Nếu chưa xử lý xong:
 
 Giải thích ngắn gọn bằng lời của bạn:
 
-1. Dữ liệu đi từ Crossref đến vector index như thế nào?
-2. Evaluation set và ground-truth document IDs dùng để đo retrieval/answer quality ra sao?
-3. Quality checks khác freshness monitoring ở điểm nào trong bài lab?
-4. Vì sao phải dùng cùng test set cho baseline, corrupted và repaired?
-5. Repair được xem là thành công dựa trên artifact và metric nào?
+1. Ticket K4 được Coordinator chuyển qua các data agent và Policy Agent như thế nào?
+2. Vì sao Verifier phải tái tính payment reconciliation và delivery variance thay vì tin Policy Agent?
+3. Evidence ID nào được phép xuất hiện trong output và cách kiểm chứng chúng từ CSV là gì?
+4. Trace JSONL cần thể hiện những handoff/event nào để audit được một case?
+5. Điều kiện nào cho phép ghi output và điều kiện nào cho phép đóng gói ZIP nộp bài?
 
 **Câu trả lời:**
 

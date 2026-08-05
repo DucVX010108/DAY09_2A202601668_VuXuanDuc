@@ -1,0 +1,14 @@
+{
+  "cohort": "K4",
+  "starter_repo": "K4-Day9-Multi-Agent-A2A",
+  "policy_version": "EC_POLICY_V2",
+  "framework": "custom Python multi-agent orchestration",
+  "runtime": "Python 3.14",
+  "model": {
+    "name": "deterministic-rule-based",
+    "parameter_size_billion": 0,
+    "used_for_decision": true
+  },
+  "trace_format": "JSON Lines",
+  "generated_at": null
+}
