@@ -1,121 +1,136 @@
-# Member Role Report — Day 9: Multi Agent A2A
-
-> Mỗi thành viên trong nhóm tự hoàn thành mẫu này để báo cáo đúng vai trò, phần việc và mức hiểu của mình. Không sao chép nguyên báo cáo chung hoặc báo cáo của thành viên khác. Thay nội dung trong dấu `[ ]` và xóa các dòng hướng dẫn không cần thiết trước khi nộp.
+# Báo cáo cá nhân — Day 09 Multi-Agent A2A
 
 ## 1. Thông tin cá nhân
 
-| Thông tin       | Nội dung     |
-| --------------- | ------------ |
-| Họ và tên       | [Họ và tên]  |
-| MSSV            | [MSSV]       |
-| Khóa/Lớp        | [K4]         |
-| Vai trò chính   | Verifier, trace, tài liệu và đóng gói |
-| Ngày hoàn thành | [YYYY-MM-DD] |
+| Thông tin | Nội dung |
+| --- | --- |
+| Họ và tên | Nguyễn Tuấn Trường |
+| MSSV | 01842 |
+| Cohort | K4 |
+| Vai trò chính | Verifier, trace, tài liệu, audit và đóng gói |
+| Ngày hoàn thành | 2026-08-05 |
 
-## 2. Vai trò và phạm vi công việc
+## 2. Phạm vi công việc trực tiếp thực hiện
 
-### Phần việc sở hữu
+| Hạng mục | File/artifact | Kết quả bàn giao |
+| --- | --- | --- |
+| Kiểm tra output độc lập | `src/verifier.py`, `src/coordinator.py` | Verifier tái tính các field nghiệp vụ từ CSV nguồn trước khi cho publish. |
+| Audit chéo 50 case | `scripts/audit_cross.py` | Script không import pipeline; tự join input và CSV để phát hiện output sai. |
+| Trace và metadata | `src/run_batch.py`, `trace.jsonl`, `metadata.json` | Trace JSONL theo run mới nhất; metadata ghi cohort, policy, model, runtime và run ID. |
+| Đóng gói submission | `scripts/package_submission.ps1`, `submission_output.zip` | ZIP chỉ có 50 entry `output/EC_001.json` đến `output/EC_050.json`. |
+| Tài liệu và preflight | `architecture.md`, `docs/policy_matrix.md`, `context.md` | Mô tả pattern, handoff, policy, checklist và kết quả kiểm tra cuối. |
 
-| Module/deliverable | File/hàm phụ trách | Input nhận vào | Output bàn giao   | Trạng thái                            |
-| ------------------ | ------------------ | -------------- | ----------------- | ------------------------------------- |
-| [Phần việc]        | [File/hàm]         | [Input]        | [Output/artifact] | [Hoàn thành/Một phần/Chưa hoàn thành] |
-| [Phần việc]        | [File/hàm]         | [Input]        | [Output/artifact] | [Hoàn thành/Một phần/Chưa hoàn thành] |
+Tôi cũng hỗ trợ tích hợp Coordinator–Policy–Verifier để đảm bảo candidate chỉ được ghi khi verifier không trả lỗi và cả batch chỉ publish khi đủ 50 case verified.
 
-Chỉ nhận ownership cho phần bạn trực tiếp thực hiện. Liên hệ rõ phần việc của bạn với đầu vào, đầu ra và các thành viên phụ thuộc vào phần đó.
+## 3. Vấn đề kỹ thuật đã giải quyết
 
-### Việc hỗ trợ ngoài phạm vi chính
+Lần chấm đầu đạt 5.6957/100 dù unit test nội bộ pass. Nguyên nhân là một phần verifier lấy lại projection từ agent, nên có khả năng xác nhận cùng lỗi với pipeline. Tôi kiểm tra lại output theo README và 9 CSV nguồn, phát hiện hai sai lệch có ảnh hưởng lớn:
 
-| Hoạt động                 | Thành viên/module được hỗ trợ | Kết quả                 |
-| ------------------------- | ----------------------------- | ----------------------- |
-| [Debug/tích hợp/tài liệu] | [Tên hoặc module]             | [Kết quả và bằng chứng] |
+1. `product_context.category_names` bị dịch sang tiếng Anh ở 43/50 case, ví dụ `health_beauty`, thay vì lấy trực tiếp `products.product_category_name` như `beleza_saude`.
+2. Khi không có carrier timestamp, `handoff_variance_hours` đúng là `null` nhưng `late_handoff` cần là `false` vì không có bằng chứng seller giao trễ. Pipeline cũ xuất `null` cho cờ này ở 7 case.
 
-## 3. Kết quả theo vai trò
+Sau khi sửa, kết quả chấm tăng lên **79/100**.
 
-| Nhiệm vụ đã thực hiện | File/hàm/artifact liên quan | Kết quả bàn giao          | Cách xác minh   |
-| --------------------- | --------------------------- | ------------------------- | --------------- |
-| [Mô tả cụ thể]        | [Đường dẫn file]            | [Artifact/metrics/report] | [Lệnh/artifact] |
-| [Mô tả cụ thể]        | [Đường dẫn file]            | [Artifact/metrics/report] | [Lệnh/artifact] |
+## 4. Cách triển khai
 
-Nêu một output cụ thể mà phần việc của bạn tạo ra hoặc giúp xác minh:
+### Verifier độc lập
 
-[Mô tả artifact, metric, report hoặc kết quả tích hợp.]
+`_verifier_facts()` trong Coordinator lấy trực tiếp từ repository:
 
-## 4. Giải thích phần kỹ thuật đã thực hiện
+- order, item, payment rows;
+- customer identity và tối đa 5 related orders;
+- product rows và `product_category_name` gốc;
+- timestamp giao hàng và seller handoff.
 
-### Vấn đề cần giải quyết
+Verifier kiểm tra schema, giới hạn array, entity/evidence ID, payment reconciliation, delivery variance, primary/secondary issue, root cause, responsible party, refund và action order. Nếu có lỗi, `process_case()` trả `RunResult.blocked`; output candidate không được publish.
 
-[Phần của bạn giải quyết vấn đề gì trong pipeline?]
+### Policy và evidence
 
-### Cách triển khai
+Policy được tổ chức theo bảng `POLICY_OUTCOMES` để một primary issue luôn map nhất quán sang root cause, primary action, refund source, responsible party và review action. Thứ tự precedence giữ nguyên `EC_POLICY_V2`:
 
-[Mô tả thuật toán, quy tắc dữ liệu, orchestration hoặc quyết định chính. Không chỉ chép lại tên hàm.]
-
-### Input, output và contract
-
-| Thành phần              | Mô tả                                  |
-| ----------------------- | -------------------------------------- |
-| Input                   | [Schema, artifact hoặc tham số]        |
-| Output                  | [Schema, artifact hoặc giá trị trả về] |
-| Module phụ thuộc        | [Module/file liên quan]                |
-| Module sử dụng output   | [Module/file liên quan]                |
-| Điều kiện lỗi cần xử lý | [Trường hợp thực tế]                   |
-
-### Cách xác minh
-
-```bash
-[Ghi lệnh thực tế đã chạy]
+```text
+canceled_order_paid
+→ unavailable_order_paid
+→ late_delivery_seller
+→ late_delivery_logistics
+→ valid_split_payment
+→ unsupported_late_claim
 ```
 
-- **Kết quả mong đợi:** [Mô tả.]
-- **Kết quả thực tế:** [Mô tả.]
-- **Artifact/log:** [Đường dẫn; không chứa secret.]
+Evidence chỉ sử dụng format có thể dựng từ CSV:
 
-## 5. Một quyết định kỹ thuật quan trọng
+```text
+order:<order_id>
+item:<order_id>:<order_item_id>
+payment:<order_id>:<payment_sequential>
+seller:<seller_id>
+policy:<root_cause_code>
+```
 
-- **Bối cảnh:** [Vấn đề hoặc lựa chọn cần quyết định.]
-- **Các phương án đã cân nhắc:** [Ít nhất hai phương án.]
-- **Phương án đã chọn:** [Lựa chọn.]
-- **Lý do:** [Trade-off về correctness, data quality, reproducibility, cost hoặc độ phức tạp.]
-- **Bằng chứng quyết định phù hợp:** [Metric, artifact hoặc kết quả thử nghiệm.]
+Policy evidence luôn được giữ ở cuối danh sách, kể cả khi giới hạn 20 evidence.
 
-## 6. Một lỗi hoặc blocker đã xử lý
+### Trace và đóng gói
 
-- **Triệu chứng/lỗi nguyên văn:** [Che toàn bộ secret trước khi ghi.]
-- **Lệnh hoặc bước tái hiện:** [Lệnh/bước.]
-- **Nguyên nhân gốc:** [Root cause, không chỉ mô tả triệu chứng.]
-- **Cách xử lý:** [Thay đổi cụ thể.]
-- **Cách xác minh sau khi sửa:** [Lệnh và kết quả.]
-- **Điều học được:** [Bài học kỹ thuật.]
+`AtomicTraceSink` tạo trace mới thay vì append lịch sử cũ. Mỗi event có `run_id`, `sequence`, `case_id`, `event_type`, `stage` và `status`; các key nhạy cảm như `api_key`, `token`, `secret`, `authorization` được redaction.
 
-Nếu chưa xử lý xong:
+Chuỗi event chính:
 
-- **Phạm vi bị ảnh hưởng:** [Module/artifact.]
-- **Những gì đã loại trừ:** [Các giả thuyết đã kiểm tra.]
-- **Bước tiếp theo:** [Hành động có thể kiểm chứng.]
+```text
+batch_started → case_started → handoff*
+→ verification_passed|verification_failed
+→ case_finished → batch_finished → output_publish
+```
 
-## 7. Hiểu biết về luồng end-to-end
+`run_batch` ghi `trace.jsonl` và `metadata.json` tại root (đúng README), đồng thời giữ bản audit trong `logging/`. Script package từ chối output thiếu, thừa hoặc có file lạ, sau đó tạo ZIP với đúng prefix `output/`.
 
-Giải thích ngắn gọn bằng lời của bạn:
+## 5. Input, output và contract
 
-1. Ticket K4 được Coordinator chuyển qua các data agent và Policy Agent như thế nào?
-2. Vì sao Verifier phải tái tính payment reconciliation và delivery variance thay vì tin Policy Agent?
-3. Evidence ID nào được phép xuất hiện trong output và cách kiểm chứng chúng từ CSV là gì?
-4. Trace JSONL cần thể hiện những handoff/event nào để audit được một case?
-5. Điều kiện nào cho phép ghi output và điều kiện nào cho phép đóng gói ZIP nộp bài?
+| Thành phần | Mô tả |
+| --- | --- |
+| Input | Một ticket K4, các raw row được join từ `data/`, và candidate JSON từ Policy/Coordinator. |
+| Output | Danh sách lỗi verifier hoặc JSON hợp lệ để publish. |
+| Contract nhận | `Ticket`, `AggregatedFacts`, `PolicyDecision`, `Handoff` trong `src/contracts.py`. |
+| Contract bàn giao | `RunResult.verified` chỉ chứa output đã pass; `RunResult.blocked` chứa lỗi có stage/agent. |
+| Điều kiện lỗi | ID không tồn tại, calculation sai, policy không khớp, vượt array limit, timestamp/null handling sai hoặc evidence sai format. |
 
-**Câu trả lời:**
+## 6. Quyết định kỹ thuật quan trọng
 
-[Viết câu trả lời tại đây.]
+**Bối cảnh:** Có thể để verifier dùng lại facts đã aggregate cho nhanh, hoặc tái truy vấn CSV để độc lập kiểm tra.
 
-## 8. Cam kết của thành viên
+**Phương án được chọn:** Verifier tái truy vấn raw source rows.
 
-Đánh dấu sau khi tự kiểm tra:
+**Lý do:** Mục tiêu của verifier là phát hiện sai lệch của agent/coordinator. Nếu dùng lại projection của agent, lỗi category hoặc customer context có thể đi qua cả hai lớp. Chi phí của việc đọc index in-memory nhỏ hơn nhiều so với rủi ro output sai.
 
-- [ ] Nội dung báo cáo phản ánh đúng phần việc và mức hiểu của tôi.
-- [ ] Tôi có thể giải thích luồng end-to-end, không chỉ module mình phụ trách.
-- [ ] Tôi không ghi “đã chạy thành công” cho phần chưa được kiểm chứng.
-- [ ] Báo cáo không chứa `.env`, API key, token hoặc secret.
-- [ ] Báo cáo này không phải bản sao nguyên văn của báo cáo nhóm hoặc báo cáo thành viên khác.
+**Bằng chứng:** `scripts/audit_cross.py` tự recompute toàn bộ 50 case từ CSV và báo `cases with mismatches: 0`; kết quả sau sửa đạt 79/100.
 
-**Họ và tên:** [Họ và tên]
-**Ngày xác nhận:** [YYYY-MM-DD]
+## 7. Cách xác minh đã chạy
+
+```powershell
+.venv\Scripts\python.exe -B -m pytest -q
+.venv\Scripts\python.exe -B -m src.run_batch
+.venv\Scripts\python.exe -B scripts\audit_cross.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package_submission.ps1 -Force
+```
+
+Kết quả thực tế:
+
+- 90/90 unit tests pass.
+- Input validation: 50/50 valid.
+- Batch: 50 `verification_passed`, 0 `verification_failed`.
+- Audit CSV độc lập: 50 case, 0 mismatch.
+- ZIP: 50 entry, từ `output/EC_001.json` đến `output/EC_050.json`, không có entry thừa.
+
+## 8. Hiểu biết end-to-end
+
+Coordinator nhận ticket, gọi bốn data agent để tạo handoff facts/evidence, sau đó Policy Agent áp EC_POLICY_V2. Coordinator assemble candidate theo schema và đưa qua Verifier. Verifier không tin kết luận policy một cách mù quáng: nó tái tính tiền, thời gian, seller handoff, entity/evidence và quyết định nghiệp vụ từ CSV. Khi một case fail, Coordinator không tạo file output cho case đó; khi bất kỳ case nào fail, batch không thay bộ output đã publish. Chỉ khi đủ 50 case verified và trace được finalize thì batch mới publish output, sau đó script package kiểm tra danh sách file và tạo ZIP nộp bài.
+
+## 9. Cam kết
+
+- [x] Báo cáo phản ánh phần việc trực tiếp thực hiện.
+- [x] Có thể giải thích luồng end-to-end và contract giữa các agent.
+- [x] Các kết quả nêu trong báo cáo đã được kiểm thử/audit.
+- [x] Báo cáo không chứa `.env`, API key, token hoặc secret.
+- [x] Báo cáo không sao chép nguyên văn báo cáo của thành viên khác.
+
+**Họ và tên:** Nguyễn Tuấn Trường
+**Ngày xác nhận:** 2026-08-05
