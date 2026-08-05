@@ -3,7 +3,7 @@
 ## Quy ước chung
 
 - Cohort duy nhất: **K4**. Chỉ dùng `EC_POLICY_V2` trong `README.md`; không sao chép logic, schema hoặc policy K3.
-- Input phải được tạo có thể tái lập từ `data/`. Không tự bịa order, payment, tracking hay refund.
+- Bộ 50 input đã được phát hành trong `input/` và là nguồn yêu cầu bất biến. Chỉ dùng `claimed_order_id` từ các file này để tra `data/`; không tạo, sửa hay thay thế ticket.
 - Quy ước nguồn sự thật: CSV → facts agent → policy engine → verifier → `output/`. LLM (nếu có) không được dùng để tính tiền, thời gian hay thay thế policy rule.
 - Mọi handoff phải có: `case_id`, `from_agent`, `to_agent`, `task`, `facts`, `evidence_ids`, `missing_or_conflicting_data`, `next_task`.
 - Cùng dùng một branch/repo nhưng mỗi người chỉ sửa các file thuộc ownership của mình. Không sửa tay JSON để qua validator.
@@ -13,7 +13,7 @@
 
 ```text
 Data CSV
-  → [M1] tạo 50 input có manifest
+  + input/EC_001.json … input/EC_050.json
   → [M2/M3/M4] các agent facts
   → [M1] coordinator + [M4] policy engine
   → [M5] verifier
@@ -22,20 +22,20 @@ Data CSV
 
 `M1` tích hợp cuối; các module không đọc output của module khác mà chỉ nhận/trả contract dữ liệu đã thống nhất.
 
-## Thành viên 1 — Coordinator, input generation và tích hợp
+## Thành viên 1 — Coordinator, kiểm tra input và tích hợp
 
-**Ownership:** `src/coordinator.py`, `src/contracts.py`, `src/generate_input.py`, `src/run_batch.py`, `input/`, `input/manifest.json`.
+**Ownership:** `src/coordinator.py`, `src/contracts.py`, `src/run_batch.py`, `logging/input_validation.json`.
 
 1. Tạo contract dataclass/JSON cho ticket, handoff và run result; quy định field bắt buộc và thứ tự serialization ổn định.
-2. Viết generator tạo chính xác 50 ticket `EC_001` … `EC_050` từ `olist_orders_dataset.csv` và các bảng liên quan. Mỗi ticket phải có `claimed_order_id`, `language: "vi"`, hai scope K4 là `true`, `policy_version: "EC_POLICY_V2"`.
-3. Chọn order **deterministic**, có manifest ghi `case_id`, `order_id`, loại case mục tiêu và lý do chọn. Dùng seed cố định; không chọn lại cùng một `order_id`.
-4. Với sự hỗ trợ từ policy predicate của M4, ưu tiên chọn dữ liệu phủ đủ sáu primary issue và các secondary issue; nếu dataset không có nhánh nào, ghi rõ trong manifest/trace thay vì bịa case.
+2. Kiểm tra đầu vào có đúng 50 file `EC_001` … `EC_050`, `case_id` duy nhất và khớp tên file, `policy_version = EC_POLICY_V2`, hai scope K4 là `true`, và mỗi `claimed_order_id` tồn tại trong `olist_orders_dataset.csv`.
+3. Ghi kết quả kiểm tra vào `logging/input_validation.json`; không ghi đè file trong `input/`. Input hiện tại đã xác nhận đủ 50 case ID, 50 order ID duy nhất, ngôn ngữ `vi` và policy V2; script vẫn phải kiểm tra lại ở mỗi run.
+4. Dùng ticket phát hành để điều phối các agent và bảo đảm mỗi `claimed_order_id` chỉ tra cứu dữ liệu thực. Nếu ticket/data nguồn lỗi, log lỗi và chặn case đó thay vì thay ticket khác.
 5. Điều phối Customer/Order-Product/Payment/Delivery → Policy → Verifier cho từng case; chỉ ghi output sau `verified=true`.
 6. Tạo run mới sẽ thay thế (không append) `logging/trace.jsonl`.
 
-**Bàn giao:** 50 file `input/*.json`, manifest, một lệnh batch và coordinator gọi đúng contract.
+**Bàn giao:** Script kiểm tra input, một lệnh batch và coordinator gọi đúng contract.
 
-**Nghiệm thu:** `python -m src.generate_input` tái tạo cùng 50 case; `python -m src.run_batch` chạy end-to-end mà không cần sửa tay file input/output.
+**Nghiệm thu:** `python -m src.run_batch` đọc trực tiếp 50 input phát hành, chạy end-to-end mà không cần sửa tay file input/output.
 
 ## Thành viên 2 — Customer và Order & Product Agent
 
@@ -101,13 +101,13 @@ Data CSV
 
 1. **Trước khi code:** M1 chốt `contracts.py`; cả nhóm duyệt contract trong cùng một buổi.
 2. **Sau 45 phút:** M2/M3 gửi một handoff mẫu từ một order thật; M4 viết policy test theo sample; M5 viết validator skeleton.
-3. **Sau 90 phút:** M1 chạy vertical slice qua đủ sáu agent. Chỉ khi verifier pass mới sinh 50 input và chạy batch.
+3. **Sau 90 phút:** M1 chạy vertical slice với `EC_001` qua đủ sáu agent. Chỉ khi verifier pass mới chạy batch trên 50 input phát hành.
 4. **Sau 170 phút:** M5 chạy quality gate; lỗi được trả về đúng owner module, không sửa trực tiếp file JSON.
 5. **Trước nộp:** M1 merge/tích hợp, M5 xác nhận artifact; cả nhóm kiểm tra git diff, không commit secret và commit source trước khi zip output.
 
 ## Definition of Done toàn nhóm
 
-- Có 50 input sinh từ CSV và 50 output tương ứng, cùng `case_id`/tên file.
+- Dùng nguyên vẹn 50 input đã phát hành và tạo 50 output tương ứng, cùng `case_id`/tên file.
 - 50 output qua validator, tất cả evidence truy xuất được từ 9 CSV và policy V2.
 - `architecture.md`, `logging/trace.jsonl`, `logging/metadata.json` và các báo cáo thành viên hoàn chỉnh trong repo.
 - `submission_output.zip` chỉ chứa 50 JSON ở cấp gốc của ZIP, không có thư mục lồng hoặc file ngoài phạm vi.
