@@ -1,0 +1,2 @@
+{"case_id":null,"event_type":"batch_started","recorded_at_utc":"2026-08-05T08:56:16.267820Z","run_id":"e2cc2ed8-54e6-430b-b410-9af055bab5a5","sequence":1,"stage":"input_validation","status":"started"}
+{"case_id":null,"errors":["repository initialization failed"],"event_type":"batch_failed","recorded_at_utc":"2026-08-05T08:56:16.273296Z","run_id":"e2cc2ed8-54e6-430b-b410-9af055bab5a5","sequence":2,"stage":"input_validation","status":"blocked"}

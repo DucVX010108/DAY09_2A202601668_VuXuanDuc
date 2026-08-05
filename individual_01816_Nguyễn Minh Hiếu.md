@@ -4,13 +4,13 @@
 
 ## 1. Thông tin cá nhân
 
-| Thông tin       | Nội dung     |
-| --------------- | ------------ |
-| Họ và tên       | [Họ và tên]  |
-| MSSV            | [MSSV]       |
-| Khóa/Lớp        | [K4]         |
-| Vai trò chính   | [Vai trò]    |
-| Ngày hoàn thành | [YYYY-MM-DD] |
+| Thông tin       | Nội dung                                        |
+| --------------- | ----------------------------------------------- |
+| Họ và tên       | Nguyễn Minh Hiếu                                |
+| MSSV            | 2A202601816                                     |
+| Khóa/Lớp        | K4                                              |
+| Vai trò chính   | Coordinator, kiểm tra input và tích hợp         |
+| Ngày hoàn thành | 2026-08-06                                      |
 
 ## 2. Vai trò và phạm vi công việc
 
