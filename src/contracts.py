@@ -624,8 +624,6 @@ class PolicyDecision:
         confidence = data["confidence"]
         if type(confidence) not in (int, float) or not 0 <= float(confidence) <= 1:
             raise ContractError("policy_decision.confidence must be in [0, 1]")
-        if float(confidence) != 1.0:
-            raise ContractError("policy_decision.confidence must be 1.0")
         ranked = data["ranked_causes"]
         responsible = data["responsible_parties"]
         if not isinstance(ranked, list) or not all(isinstance(item, Mapping) for item in ranked) or not ranked or len(ranked) > 3:

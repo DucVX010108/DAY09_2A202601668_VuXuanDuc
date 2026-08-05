@@ -25,6 +25,7 @@ from .contracts import (
 )
 from .coordinator import process_case
 from .repository import OlistRepository
+from .runtime import MODEL_NAME, MODEL_PARAMETER_SIZE_BILLION
 
 
 _SENSITIVE_TRACE_KEYWORDS = ("api_key", "authorization", "token", "secret")
@@ -71,6 +72,50 @@ def atomic_write_json(path: Path, value: Any) -> None:
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+def atomic_copy_file(source: Path, destination: Path) -> None:
+    """Publish an audit artifact without exposing a partial root-level file."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "wb", dir=destination.parent, prefix=f".{destination.name}.",
+        suffix=".tmp", delete=False,
+    )
+    temporary_path = Path(handle.name)
+    try:
+        with handle, source.open("rb") as input_stream:
+            shutil.copyfileobj(input_stream, handle)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.replace(temporary_path, destination)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def submission_metadata(run_id: str) -> dict[str, Any]:
+    """Metadata required by README, generated for the exact batch trace."""
+
+    return {
+        "cohort": "K4",
+        "starter_repo": "K4-Day9-Multi-Agent-A2A",
+        "policy_version": "EC_POLICY_V2",
+        "framework": "custom Python multi-agent orchestration",
+        "runtime": "Python 3.14",
+        "tools": ["Python standard library (csv, json, datetime)"],
+        "model": {
+            "name": MODEL_NAME,
+            "parameter_size_billion": MODEL_PARAMETER_SIZE_BILLION,
+            "used_for_decision": True,
+        },
+        "trace_format": "JSON Lines",
+        "run_id": run_id,
+        "generated_at": _utc_now(),
+    }
 
 
 class AtomicTraceSink:
@@ -356,6 +401,9 @@ def run_batch(
     logging_dir = root / "logging"
     validation_path = logging_dir / "input_validation.json"
     trace_path = logging_dir / "trace.jsonl"
+    metadata_path = logging_dir / "metadata.json"
+    root_trace_path = root / "trace.jsonl"
+    root_metadata_path = root / "metadata.json"
     run_id = str(uuid.uuid4())
     staging_dir: Path | None = None
     trace: TraceGuard | None = None
@@ -363,6 +411,9 @@ def run_batch(
     exit_code = 1
     try:
         logging_dir.mkdir(parents=True, exist_ok=True)
+        metadata = submission_metadata(run_id)
+        atomic_write_json(metadata_path, metadata)
+        atomic_write_json(root_metadata_path, metadata)
         try:
             trace = TraceGuard(trace_factory(trace_path, run_id))
             trace.write({"event_type": "batch_started", "case_id": None, "stage": "input_validation", "status": "started"})
@@ -427,6 +478,8 @@ def run_batch(
             trace.finalize()
             if trace.failed:
                 exit_code = 1
+        if trace_path.is_file():
+            atomic_copy_file(trace_path, root_trace_path)
     return exit_code
 
 

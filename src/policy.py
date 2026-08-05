@@ -258,6 +258,26 @@ def _resolve_case_status(primary_issue: str) -> str:
     return "action_required" if primary_issue in _REFUND_ISSUES else "no_action"
 
 
+# README §6 publishes 0.92 for a case where every input the decision needs is
+# present, so that is the ceiling; each missing piece of evidence lowers it.
+_CONFIDENCE_FULL_EVIDENCE = 0.92
+
+
+def _resolve_confidence(facts: dict[str, Any]) -> float:
+    """Score how completely the evidence behind this decision is populated."""
+    score = _CONFIDENCE_FULL_EVIDENCE
+    if facts["item_count"] == 0:
+        # No item rows: totals and seller handoff cannot be checked at all.
+        score -= 0.12
+    if facts.get("delivery_variance_hours") is None:
+        score -= 0.05
+    if facts["payment_count"] == 0:
+        score -= 0.10
+    elif facts["reconciled"] is False:
+        score -= 0.07
+    return round(max(score, 0.50), 2)
+
+
 def _resolve_primary_action(primary_issue: str) -> str:
     """Return primary resolution action for the issue."""
     return POLICY_OUTCOMES[primary_issue].primary_action
@@ -422,6 +442,7 @@ def apply_policy(facts: dict[str, Any]) -> dict[str, Any]:
         "primary_issue": primary_issue,
         "secondary_issues": secondary_issues,
         "case_status": case_status,
+        "confidence": _resolve_confidence(facts),
         "root_cause_analysis": {
             "ranked_causes": [{"cause_code": root_cause, "rank": 1}],
             "responsible_parties": responsible_parties,

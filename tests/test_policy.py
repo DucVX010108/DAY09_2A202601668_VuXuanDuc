@@ -510,3 +510,39 @@ def test_multiple_late_sellers_capped_at_3_responsible_parties():
     )
     decision = apply_policy(facts)
     assert len(decision["root_cause_analysis"]["responsible_parties"]) <= 3
+
+
+# ---------------------------------------------------------------------------
+# Confidence — evidence completeness, anchored on the README §6 worked example
+# ---------------------------------------------------------------------------
+
+
+def test_confidence_matches_readme_example_for_fully_evidenced_case():
+    """A case with every needed input present scores the README's 0.92."""
+    facts = _base_facts(
+        delivery_variance_hours=87.39,
+        late_handoff=True,
+        late_handoff_seller_ids=["seller_1"],
+        payment_count=2,
+    )
+    decision = apply_policy(facts)
+    assert decision["primary_issue"] == "late_delivery_seller"
+    assert decision["confidence"] == 0.92
+
+
+def test_confidence_drops_when_evidence_is_missing():
+    """Missing items and delivery timing must not report full confidence."""
+    no_items = apply_policy(_base_facts(
+        order_status="unavailable",
+        payment_total_brl=80.0,
+        item_count=0,
+        seller_count=0,
+        category_count=0,
+        delivery_variance_hours=None,
+        reconciled=None,
+    ))
+    assert no_items["confidence"] == 0.75
+
+    unreconciled = apply_policy(_base_facts(order_status="canceled", reconciled=False))
+    assert unreconciled["confidence"] < 0.92
+    assert 0.0 <= unreconciled["confidence"] <= 1.0

@@ -290,7 +290,7 @@ def _policy_adapter(aggregated_facts: dict[str, Any]) -> dict[str, Any]:
             "primary_issue": decision["primary_issue"],
             "secondary_issues": decision["secondary_issues"],
             "case_status": decision["case_status"],
-            "confidence": 1.0,
+            "confidence": decision["confidence"],
             "ranked_causes": ranked_causes,
             "responsible_parties": decision["root_cause_analysis"]["responsible_parties"],
             "recommended_refund_brl": decision["financial_resolution"]["recommended_refund_brl"],

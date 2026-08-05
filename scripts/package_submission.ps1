@@ -9,13 +9,20 @@ $ErrorActionPreference = 'Stop'
 
 $expectedNames = 1..50 | ForEach-Object { 'EC_{0:D3}.json' -f $_ }
 $resolvedOutput = (Resolve-Path -LiteralPath $OutputDirectory).Path
-$files = @(Get-ChildItem -LiteralPath $resolvedOutput -File)
-$jsonFiles = @($files | Where-Object { $_.Extension -eq '.json' })
-$actualNames = @($jsonFiles.Name | Sort-Object)
+# Compare every file, not just the .json ones: a stray such as submission.txt
+# must fail here rather than be silently skipped, because a hand-made zip of
+# output/ would carry it into the submission.
+$files = @(Get-ChildItem -LiteralPath $resolvedOutput -File -Force |
+    Where-Object { $_.Name -ne '.gitkeep' })
+$actualNames = @($files.Name | Sort-Object)
 $comparison = Compare-Object -ReferenceObject $expectedNames -DifferenceObject $actualNames
 
 if ($comparison) {
-    throw "output/ must contain exactly EC_001.json through EC_050.json and no other files."
+    $detail = ($comparison | ForEach-Object {
+        $side = if ($_.SideIndicator -eq '=>') { 'unexpected' } else { 'missing' }
+        "$side`: $($_.InputObject)"
+    }) -join '; '
+    throw "output/ must contain exactly EC_001.json through EC_050.json and no other files. $detail"
 }
 
 if (Test-Path -LiteralPath $Destination) {

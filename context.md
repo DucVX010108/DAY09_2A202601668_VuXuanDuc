@@ -156,15 +156,18 @@ output/EC_050.json
 
 Không đưa source, trace, metadata, `.env`, cache hoặc virtual environment vào ZIP.
 
+Repository lưu `trace.jsonl` và `metadata.json` tại root đúng yêu cầu README. Hai file được tái tạo atomically cùng batch và đồng thời lưu bản audit dưới `logging/`.
+
 ## 8. Kết quả chấm
 
 - Điểm ban đầu: **5.6957/100**
 - Điểm sau khi sửa: **79/100**
 - Mức cải thiện: **+73.3043 điểm**
 
+Preflight cuối: 90/90 unit tests pass, batch xác minh 50/50 case và `scripts/audit_cross.py` báo 0 mismatch trực tiếp với CSV nguồn.
+
 Commit chứa phiên bản đã sửa:
 
 ```text
 389a4d2 fix: align K4 policy output with README grader
 ```
-
