@@ -2,8 +2,6 @@
 
 from typing import Any
 
-MODEL_NAME = "gpt-4o-mini"
-
 
 def investigate_customer(ticket: dict[str, Any], repository: Any) -> dict[str, Any]:
     """Return customer identity and at most five related order IDs.

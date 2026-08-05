@@ -4,6 +4,7 @@
   "policy_version": "EC_POLICY_V2",
   "framework": "custom Python multi-agent orchestration",
   "runtime": "Python 3.14",
+  "tools": ["Python standard library (csv, json, datetime)"],
   "model": {
     "name": "deterministic-rule-based",
     "parameter_size_billion": 0,

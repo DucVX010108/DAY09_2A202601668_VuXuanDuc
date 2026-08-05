@@ -213,7 +213,7 @@ class TestNullTimestamp:
         result = investigate_delivery(_ticket(order_id="o4c"), repo)
         sha = result["facts"]["seller_handoff_analysis"][0]
         assert sha["handoff_variance_hours"] is None
-        assert sha["late_handoff"] is None
+        assert sha["late_handoff"] is False
 
 
 class TestMultiSellerMixed:

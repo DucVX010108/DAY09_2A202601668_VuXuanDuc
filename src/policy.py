@@ -14,6 +14,8 @@ so that M1/M5 can handle it as a data error — no invented decisions.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -23,28 +25,50 @@ from typing import Any
 POLICY_VERSION = "EC_POLICY_V2"
 
 # Map primary issue → root-cause code
-_ROOT_CAUSE_MAP: dict[str, str] = {
-    "canceled_order_paid": "ORDER_CANCELED_AFTER_PAYMENT",
-    "unavailable_order_paid": "ORDER_UNAVAILABLE_AFTER_PAYMENT",
-    "late_delivery_seller": "SELLER_HANDOFF_AFTER_LIMIT",
-    "late_delivery_logistics": "CARRIER_DELIVERED_AFTER_ESTIMATE",
-    "valid_split_payment": "MULTIPLE_PAYMENTS_RECONCILED",
-    "unsupported_late_claim": "DELIVERY_WITHIN_ESTIMATE",
+@dataclass(frozen=True)
+class PolicyOutcome:
+    """Fixed consequences of one EC_POLICY_V2 primary issue."""
+
+    root_cause: str
+    primary_action: str
+    refund_source: str | None
+    responsible_party_type: str | None
+    responsible_party_id: str | None = None
+    review_action: str | None = None
+
+
+# Keeping all fixed consequences in one table prevents decision, refund,
+# responsibility and action mappings from drifting apart.
+POLICY_OUTCOMES: dict[str, PolicyOutcome] = {
+    "canceled_order_paid": PolicyOutcome(
+        "ORDER_CANCELED_AFTER_PAYMENT", "issue_full_refund",
+        "payment_total_brl", "platform", "OLIST_PLATFORM",
+    ),
+    "unavailable_order_paid": PolicyOutcome(
+        "ORDER_UNAVAILABLE_AFTER_PAYMENT", "issue_full_refund",
+        "payment_total_brl", "platform", "OLIST_PLATFORM",
+    ),
+    "late_delivery_seller": PolicyOutcome(
+        "SELLER_HANDOFF_AFTER_LIMIT", "refund_freight",
+        "freight_total_brl", "seller", review_action="review_seller_handoff",
+    ),
+    "late_delivery_logistics": PolicyOutcome(
+        "CARRIER_DELIVERED_AFTER_ESTIMATE", "refund_freight",
+        "freight_total_brl", "logistics_provider", "LOGISTICS_PROVIDER",
+        "review_carrier_delay",
+    ),
+    "valid_split_payment": PolicyOutcome(
+        "MULTIPLE_PAYMENTS_RECONCILED", "explain_valid_split_payment",
+        None, None,
+    ),
+    "unsupported_late_claim": PolicyOutcome(
+        "DELIVERY_WITHIN_ESTIMATE", "reject_late_refund", None, None,
+    ),
 }
 
-# Map primary issue → primary action
-_PRIMARY_ACTION_MAP: dict[str, str] = {
-    "canceled_order_paid": "issue_full_refund",
-    "unavailable_order_paid": "issue_full_refund",
-    "late_delivery_seller": "refund_freight",
-    "late_delivery_logistics": "refund_freight",
-    "valid_split_payment": "explain_valid_split_payment",
-    "unsupported_late_claim": "reject_late_refund",
-}
-
-# Primary issues that require a refund (case_status = action_required)
 _REFUND_ISSUES = frozenset(
-    {"canceled_order_paid", "unavailable_order_paid", "late_delivery_seller", "late_delivery_logistics"}
+    issue for issue, outcome in POLICY_OUTCOMES.items()
+    if outcome.refund_source is not None
 )
 
 # Required top-level keys that must be present in facts dict
@@ -89,25 +113,69 @@ def _validate_required_fields(facts: dict[str, Any]) -> None:
             raise PolicyDecisionError(f"missing_required_field: {field}")
 
 
+def _decimal(value: Any, field: str) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise PolicyDecisionError(f"invalid_numeric_field: {field}") from exc
+
+
+def _money(value: Any, field: str) -> float:
+    return float(
+        _decimal(value, field).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    )
+
+
+def _validate_consistency(facts: dict[str, Any]) -> None:
+    """Reject contradictory handoffs before policy classification."""
+
+    late_handoff = facts["late_handoff"]
+    late_sellers = facts["late_handoff_seller_ids"]
+    if not isinstance(late_handoff, bool):
+        raise PolicyDecisionError("invalid_field: late_handoff")
+    if not isinstance(late_sellers, list) or not all(
+        isinstance(value, str) and value for value in late_sellers
+    ):
+        raise PolicyDecisionError("invalid_field: late_handoff_seller_ids")
+    if late_handoff != bool(late_sellers):
+        raise PolicyDecisionError(
+            "conflicting_fields: late_handoff, late_handoff_seller_ids"
+        )
+    for field in ("payment_count", "item_count", "seller_count", "category_count"):
+        value = facts[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise PolicyDecisionError(f"invalid_count_field: {field}")
+    if facts["reconciled"] is not None and not isinstance(facts["reconciled"], bool):
+        raise PolicyDecisionError("invalid_field: reconciled")
+    _decimal(facts["payment_total_brl"], "payment_total_brl")
+    _decimal(facts["freight_total_brl"], "freight_total_brl")
+    if facts.get("delivery_variance_hours") is not None:
+        _decimal(facts["delivery_variance_hours"], "delivery_variance_hours")
+
+
 def _resolve_primary_issue(facts: dict[str, Any]) -> str:
     """Apply EC_POLICY_V2 priority chain and return the matching primary issue.
 
     Raises PolicyDecisionError if no branch matches (data error, not fallback).
     """
     order_status: str = facts["order_status"]
-    payment_total: float = facts["payment_total_brl"]
-    delivery_variance: float | None = facts.get("delivery_variance_hours")
-    late_handoff: bool | None = facts["late_handoff"]
+    payment_total = _decimal(facts["payment_total_brl"], "payment_total_brl")
+    delivery_variance = (
+        _decimal(facts["delivery_variance_hours"], "delivery_variance_hours")
+        if facts.get("delivery_variance_hours") is not None
+        else None
+    )
+    late_handoff: bool = facts["late_handoff"]
     late_sellers: list = facts["late_handoff_seller_ids"]
     payment_count: int = facts["payment_count"]
     reconciled: bool | None = facts["reconciled"]
 
     # P1 — Canceled order that has been paid (highest priority)
-    if order_status == "canceled" and payment_total > 0:
+    if order_status == "canceled" and payment_total > Decimal("0"):
         return "canceled_order_paid"
 
     # P2 — Unavailable order that has been paid
-    if order_status == "unavailable" and payment_total > 0:
+    if order_status == "unavailable" and payment_total > Decimal("0"):
         return "unavailable_order_paid"
 
     # P3 — Late delivery caused by seller(s)
@@ -151,7 +219,7 @@ def _resolve_primary_issue(facts: dict[str, Any]) -> str:
 
 def _resolve_root_cause(primary_issue: str) -> str:
     """Return root-cause code for a given primary issue."""
-    return _ROOT_CAUSE_MAP[primary_issue]
+    return POLICY_OUTCOMES[primary_issue].root_cause
 
 
 def _resolve_responsible_parties(
@@ -159,8 +227,7 @@ def _resolve_responsible_parties(
     late_handoff_seller_ids: list[str],
 ) -> list[dict[str, str]]:
     """Return list of responsible party dicts (max 3 per README)."""
-    if primary_issue in ("canceled_order_paid", "unavailable_order_paid"):
-        return [{"party_type": "platform", "party_id": "OLIST_PLATFORM"}]
+    outcome = POLICY_OUTCOMES[primary_issue]
 
     if primary_issue == "late_delivery_seller":
         # One entry per late seller, capped at 3
@@ -169,8 +236,12 @@ def _resolve_responsible_parties(
             for sid in late_handoff_seller_ids[:3]
         ]
 
-    if primary_issue == "late_delivery_logistics":
-        return [{"party_type": "logistics_provider", "party_id": "LOGISTICS_PROVIDER"}]
+    if outcome.responsible_party_type is not None:
+        assert outcome.responsible_party_id is not None
+        return [{
+            "party_type": outcome.responsible_party_type,
+            "party_id": outcome.responsible_party_id,
+        }]
 
     # valid_split_payment / unsupported_late_claim — no responsible party
     return []
@@ -178,13 +249,8 @@ def _resolve_responsible_parties(
 
 def _resolve_refund(primary_issue: str, facts: dict[str, Any]) -> float:
     """Return recommended refund amount in BRL (0.00 if no refund)."""
-    if primary_issue in ("canceled_order_paid", "unavailable_order_paid"):
-        return round(float(facts["payment_total_brl"]), 2)
-
-    if primary_issue in ("late_delivery_seller", "late_delivery_logistics"):
-        return round(float(facts["freight_total_brl"]), 2)
-
-    return 0.00
+    source = POLICY_OUTCOMES[primary_issue].refund_source
+    return _money(facts[source], source) if source is not None else 0.0
 
 
 def _resolve_case_status(primary_issue: str) -> str:
@@ -194,7 +260,7 @@ def _resolve_case_status(primary_issue: str) -> str:
 
 def _resolve_primary_action(primary_issue: str) -> str:
     """Return primary resolution action for the issue."""
-    return _PRIMARY_ACTION_MAP[primary_issue]
+    return POLICY_OUTCOMES[primary_issue].primary_action
 
 
 def _resolve_secondary_issues(facts: dict[str, Any]) -> list[str]:
@@ -242,10 +308,9 @@ def _resolve_actions(
     actions: list[str] = [_resolve_primary_action(primary_issue)]
 
     # 1. Delay review — mutually exclusive per primary issue
-    if primary_issue == "late_delivery_seller":
-        actions.append("review_seller_handoff")
-    elif primary_issue == "late_delivery_logistics":
-        actions.append("review_carrier_delay")
+    review_action = POLICY_OUTCOMES[primary_issue].review_action
+    if review_action is not None:
+        actions.append(review_action)
 
     # 2. Refund completion check
     if primary_issue in _REFUND_ISSUES:
@@ -271,11 +336,10 @@ def _build_evidence_ids(
     Only real IDs from facts are used; policy:<root_cause_code> is appended last.
     Capped at 20 per README.
     """
-    base: list[str] = list(facts.get("evidence_ids", []))
+    base = list(dict.fromkeys(facts.get("evidence_ids", [])))
     policy_ev = f"policy:{root_cause_code}"
-    if policy_ev not in base:
-        base.append(policy_ev)
-    return base[:20]
+    base = [evidence for evidence in base if evidence != policy_ev]
+    return [*base[:19], policy_ev]
 
 
 def _normalise_aggregated_facts(facts: dict[str, Any]) -> dict[str, Any]:
@@ -288,8 +352,11 @@ def _normalise_aggregated_facts(facts: dict[str, Any]) -> dict[str, Any]:
     delivery = facts["delivery"]
     customer = facts["customer"]
     seller_analysis = delivery.get("seller_handoff_analysis", [])
-    late_values = [entry.get("late_handoff") for entry in seller_analysis if isinstance(entry, dict)]
-    late_handoff = True if any(value is True for value in late_values) else (None if any(value is None for value in late_values) else False)
+    late_handoff = any(
+        entry.get("late_handoff") is True
+        for entry in seller_analysis
+        if isinstance(entry, dict)
+    )
     return {
         "order_id": order_product["order_id"],
         "order_status": order_product["order_status"],
@@ -337,6 +404,7 @@ def apply_policy(facts: dict[str, Any]) -> dict[str, Any]:
     """
     facts = _normalise_aggregated_facts(facts)
     _validate_required_fields(facts)
+    _validate_consistency(facts)
 
     primary_issue = _resolve_primary_issue(facts)
     root_cause = _resolve_root_cause(primary_issue)

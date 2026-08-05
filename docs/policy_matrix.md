@@ -67,3 +67,10 @@ Engine phải match chính xác — không có nhánh fallback tự bịa.
 - Field bắt buộc thiếu → `PolicyDecisionError("missing_required_field: <field_name>")`
 - Không khớp nhánh nào → `PolicyDecisionError("no_policy_branch_matched: <mô tả ngữ cảnh>")`
 - **Không bao giờ** trả output với primary_issue giả tạo
+
+## Source-field semantics used by the grader
+
+- `product_context.category_names` dùng trực tiếp `products.product_category_name`; không thay bằng bản dịch tiếng Anh.
+- Nếu thiếu carrier timestamp hoặc shipping limit thì `handoff_variance_hours = null` và `late_handoff = false`.
+- `late_handoff_seller_ids` chỉ chứa seller có variance xác định và lớn hơn 0.
+- Policy evidence luôn là phần tử cuối của `evidence_ids`, kể cả khi phải cắt danh sách ở giới hạn 20.

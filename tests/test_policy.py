@@ -498,6 +498,7 @@ def test_evidence_ids_capped_at_20():
     )
     decision = apply_policy(facts)
     assert len(decision["evidence_ids"]) <= 20
+    assert decision["evidence_ids"][-1] == "policy:ORDER_CANCELED_AFTER_PAYMENT"
 
 
 def test_multiple_late_sellers_capped_at_3_responsible_parties():

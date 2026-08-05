@@ -31,6 +31,7 @@ def test_order_product_single_item(repo):
     assert len(result["facts"]["seller_ids"]) <= 3
     assert len(result["facts"]["product_ids"]) <= 5
     assert len(result["facts"]["category_names"]) <= 5
+    assert result["facts"]["category_names"] == ["beleza_saude"]
 
 
 def test_order_product_limits(repo):

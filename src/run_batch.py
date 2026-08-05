@@ -27,6 +27,24 @@ from .coordinator import process_case
 from .repository import OlistRepository
 
 
+_SENSITIVE_TRACE_KEYWORDS = ("api_key", "authorization", "token", "secret")
+
+
+def _redact_trace_value(value: Any) -> Any:
+    """Keep audit trace useful without allowing credentials into a submission."""
+
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]"
+            if any(keyword in key.lower() for keyword in _SENSITIVE_TRACE_KEYWORDS)
+            else _redact_trace_value(nested_value)
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_trace_value(item) for item in value]
+    return value
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
@@ -73,7 +91,7 @@ class AtomicTraceSink:
             "run_id": self.run_id,
             "sequence": self._sequence,
             "recorded_at_utc": _utc_now(),
-            **event,
+            **_redact_trace_value(event),
         }
         self._stream.write(dumps_json(record))
         self._stream.flush()

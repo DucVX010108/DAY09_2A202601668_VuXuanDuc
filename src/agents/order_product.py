@@ -2,8 +2,6 @@
 
 from typing import Any
 
-MODEL_NAME = "gpt-4o-mini"
-
 
 def investigate_order_and_product(ticket: dict[str, Any], repository: Any) -> dict[str, Any]:
     """Return raw order/item/seller/product facts and valid evidence IDs.
@@ -12,7 +10,9 @@ def investigate_order_and_product(ticket: dict[str, Any], repository: Any) -> di
     - Items: max 5, in source CSV order.
     - Sellers: max 3 unique, in source appearance order.
     - Products: max 5 unique, in source appearance order.
-    - Categories: max 5 unique, translated to English if available.
+    - Categories: max 5 unique ``product_category_name`` values from the
+      products CSV.  The output schema asks for the source category name; the
+      translation table is not part of this field's contract.
     - Missing items: return empty arrays, report missing_or_conflicting_data.
     - Evidence IDs: order:<id>, item:<order_id>:<item_id>, seller:<seller_id>.
     """
@@ -82,12 +82,11 @@ def investigate_order_and_product(ticket: dict[str, Any], repository: Any) -> di
         for pid in product_ids:
             product_data = repository.get_product(pid)
             if product_data:
-                cat_pt = product_data.get("product_category_name")
-                if cat_pt:
-                    cat_en = repository.translate_category(cat_pt) or cat_pt
-                    if cat_en and cat_en not in seen_categories:
-                        seen_categories.add(cat_en)
-                        category_names.append(cat_en)
+                category_name = product_data.get("product_category_name")
+                if category_name:
+                    if category_name not in seen_categories:
+                        seen_categories.add(category_name)
+                        category_names.append(category_name)
                         if len(category_names) == 5:
                             break
 

@@ -308,7 +308,7 @@ def _delivery_expected(order: dict[str, Any], items: list[dict[str, Any]], selle
         limits = [_value(item, "shipping_limit_date") for item in seller_items if _value(item, "shipping_limit_date")]
         shipping_limit = min(limits) if limits else None
         handoff_variance = _hours_between(carrier, shipping_limit, errors, f"handoff_variance:{seller_id}")
-        late_handoff = None if handoff_variance is None else handoff_variance > Decimal("0")
+        late_handoff = handoff_variance is not None and handoff_variance > Decimal("0")
         if late_handoff:
             late_sellers.append(seller_id)
         seller_analysis.append({

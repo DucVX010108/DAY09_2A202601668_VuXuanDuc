@@ -528,7 +528,7 @@ class SellerHandoffFact:
     seller_id: str
     shipping_limit_at: str | None
     handoff_variance_hours: Decimal | None
-    late_handoff: bool | None
+    late_handoff: bool
 
     @classmethod
     def from_dict(cls, value: Any) -> "SellerHandoffFact":
@@ -538,11 +538,9 @@ class SellerHandoffFact:
         if shipping_limit is not None:
             _require_string(shipping_limit, "seller_handoff.shipping_limit_at")
         variance = _decimal(data["handoff_variance_hours"], "seller_handoff.handoff_variance_hours", nullable=True)
-        late = data["late_handoff"]
-        if late is not None:
-            late = _require_bool(late, "seller_handoff.late_handoff")
-        if variance is None and late is not None:
-            raise ContractError("seller_handoff.late_handoff must be null without variance")
+        late = _require_bool(data["late_handoff"], "seller_handoff.late_handoff")
+        if variance is None and late:
+            raise ContractError("seller_handoff.late_handoff cannot be true without variance")
         if variance is not None and shipping_limit is None:
             raise ContractError("seller_handoff.shipping_limit_at is required with variance")
         if variance is not None and late != (variance > 0):

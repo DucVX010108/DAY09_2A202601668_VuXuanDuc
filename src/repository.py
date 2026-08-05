@@ -4,8 +4,6 @@ import csv
 import os
 from typing import Any
 
-MODEL_NAME = "gpt-4o-mini"
-
 
 class OlistRepository:
     """Load and index Olist CSV data once per batch run."""

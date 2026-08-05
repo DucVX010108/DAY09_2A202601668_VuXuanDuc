@@ -151,8 +151,7 @@ def _order_product_adapter(ticket: dict[str, Any], repository: object) -> dict[s
         product = repository.get_product(product_id)
         category = None
         if isinstance(product, dict):
-            category_source = product.get("product_category_name")
-            category = repository.translate_category(category_source) if category_source else None
+            category = product.get("product_category_name") or None
         item_facts.append({
             "order_id": order_id,
             "order_item_id": str(item["order_item_id"]),
@@ -248,8 +247,7 @@ def _delivery_adapter(ticket: dict[str, Any], repository: object) -> dict[str, A
 def _policy_input(facts: AggregatedFacts) -> dict[str, Any]:
     """Project shared typed facts to Member 4's stable policy-engine input."""
 
-    late_values = [entry.late_handoff for entry in facts.delivery.seller_handoff_analysis]
-    late_handoff = True if any(value is True for value in late_values) else (None if any(value is None for value in late_values) else False)
+    late_handoff = bool(facts.delivery.late_handoff_seller_ids)
     return {
         "order_id": facts.order_product.order_id,
         "order_status": facts.order_product.order_status,
@@ -306,7 +304,12 @@ def _policy_adapter(aggregated_facts: dict[str, Any]) -> dict[str, Any]:
 
 
 def _verifier_facts(facts: AggregatedFacts, repository: object) -> dict[str, Any]:
-    """Give Verifier raw source rows so it can recompute independently."""
+    """Give Verifier only source-derived rows so it can recompute independently.
+
+    Do not copy customer or category projections from specialist handoffs here:
+    doing so would let the verifier approve the same transformation bug that
+    produced the candidate output.
+    """
 
     order_id = facts.ticket.customer_request.claimed_order_id
     get_order = getattr(repository, "get_order", None)
@@ -317,13 +320,42 @@ def _verifier_facts(facts: AggregatedFacts, repository: object) -> dict[str, Any
     order = get_order(order_id)
     if not isinstance(order, dict):
         raise ContractError("verifier cannot retrieve the claimed order")
+    items = _repository_rows(repository, "get_order_items", "order_items", order_id)
+    customer_id = order.get("customer_id")
+    get_customer = getattr(repository, "get_customer", None)
+    customer = get_customer(customer_id) if callable(get_customer) and isinstance(customer_id, str) else None
+    if not isinstance(customer, dict):
+        raise ContractError("verifier cannot retrieve the claimed customer")
+    customer_unique_id = customer.get("customer_unique_id")
+    if not isinstance(customer_unique_id, str) or not customer_unique_id:
+        raise ContractError("verifier cannot retrieve customer_unique_id")
+    get_related_orders = getattr(repository, "get_related_orders", None)
+    if not callable(get_related_orders):
+        raise ContractError("verifier cannot retrieve customer order history")
+    related_order_ids = get_related_orders(customer_unique_id, order_id, limit=5)
+    get_product = getattr(repository, "get_product", None)
+    if not callable(get_product):
+        raise ContractError("verifier cannot retrieve product rows")
+    products: list[dict[str, Any]] = []
+    seen_product_ids: set[str] = set()
+    for item in items:
+        product_id = str(item.get("product_id", ""))
+        if not product_id or product_id in seen_product_ids:
+            continue
+        seen_product_ids.add(product_id)
+        product = get_product(product_id)
+        if isinstance(product, dict):
+            products.append(product)
     return {
         "case_id": facts.ticket.case_id,
         "order": order,
-        "items": _repository_rows(repository, "get_order_items", "order_items", order_id),
+        "items": items,
         "payments": _repository_rows(repository, "get_order_payments", "order_payments", order_id),
-        "customer": facts.customer.to_dict(),
-        "category_names": list(facts.order_product.category_names),
+        "customer": {
+            "customer_unique_id": customer_unique_id,
+            "related_order_ids": list(related_order_ids),
+        },
+        "products": products,
     }
 
 
@@ -502,10 +534,12 @@ def process_case(ticket: Ticket | Mapping[str, Any], repository: object, trace: 
         if not isinstance(verifier_errors, list):
             raise ContractError("verifier must return a list of errors")
         if verifier_errors:
+            _emit(trace, {"event_type": "verification_failed", "case_id": case_id, "stage": "verification", "status": "blocked", "errors": list(verifier_errors)})
             return RunResult.blocked(case_id, [_error("VERIFICATION_FAILED", Stage.VERIFICATION, str(message), agent=AgentName.VERIFIER.value) for message in verifier_errors], durations)
     except ContractError as exc:
         return RunResult.blocked(case_id, [_error("VERIFICATION_FAILED", Stage.VERIFICATION, str(exc), agent=AgentName.VERIFIER.value)], durations)
     except Exception as exc:
         return RunResult.blocked(case_id, [_error("VERIFICATION_FAILED", Stage.VERIFICATION, f"{type(exc).__name__}: {exc}", agent=AgentName.VERIFIER.value)], durations)
+    _emit(trace, {"event_type": "verification_passed", "case_id": case_id, "stage": "verification", "status": "verified"})
     _emit(trace, {"event_type": "case_finished", "case_id": case_id, "stage": "verification", "status": "verified"})
     return RunResult.verified(case_id, output, durations)

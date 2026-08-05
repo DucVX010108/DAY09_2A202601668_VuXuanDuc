@@ -192,16 +192,19 @@ def investigate_delivery(ticket: dict, repository: object) -> dict:
                 if carrier_dt is not None:
                     hv_secs = (carrier_dt - earliest_limit_dt).total_seconds()
                     handoff_variance: float | None = round(hv_secs / 3600, 2)
-                    late: bool | None = handoff_variance > 0
+                    late = handoff_variance > 0
                 else:
                     handoff_variance = None
-                    late = None
+                    # ``late_handoff`` is a boolean flag in the published
+                    # schema.  Missing timestamps make the variance unknown,
+                    # but do not provide evidence of a late handoff.
+                    late = False
                     if "missing_carrier_handoff_date" not in missing:
                         missing.append("missing_carrier_handoff_date")
             else:
                 earliest_limit_str = None
                 handoff_variance = None
-                late = None
+                late = False
 
             seller_handoff_analysis.append({
                 "seller_id": seller_id,

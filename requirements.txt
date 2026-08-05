@@ -1,0 +1,2 @@
+# Development/test dependencies. Runtime code uses the Python standard library.
+pytest>=8,<9
