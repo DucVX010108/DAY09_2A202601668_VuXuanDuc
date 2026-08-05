@@ -88,6 +88,245 @@ def _stable_unique(values: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+def _repository_rows(repository: object, method_name: str, mapping_name: str, order_id: str) -> list[dict[str, Any]]:
+    """Read a source-order list without coupling domain agents to one repo API."""
+
+    method = getattr(repository, method_name, None)
+    if callable(method):
+        value = method(order_id)
+        return list(value) if value is not None else []
+    mapping = getattr(repository, mapping_name, None)
+    if isinstance(mapping, dict):
+        value = mapping.get(order_id, [])
+        return list(value) if isinstance(value, list) else []
+    return []
+
+
+def _customer_adapter(ticket: dict[str, Any], repository: object) -> dict[str, Any]:
+    """Adapt Member 2's public agent result to the shared M1 handoff contract."""
+
+    raw = investigate_customer(ticket, repository)
+    if not isinstance(raw, dict) or not raw or raw.get("next_task") == "aggregate_customer_facts":
+        return raw
+    order_id = ticket["customer_request"]["claimed_order_id"]
+    order = repository.get_order(order_id)
+    if not isinstance(order, dict):
+        raise ContractError("customer adapter cannot load the claimed order")
+    customer_id = order.get("customer_id")
+    customer_unique_id = raw["facts"].get("customer_unique_id")
+    if not isinstance(customer_id, str) or not isinstance(customer_unique_id, str):
+        raise ContractError("customer adapter received incomplete customer identity")
+    all_related = getattr(repository, "customer_unique_to_orders", {}).get(customer_unique_id, [])
+    related_order_count = sum(order_value != order_id for order_value in all_related)
+    related_order_ids = list(raw["facts"].get("related_order_ids", []))[:5]
+    return {
+        **raw,
+        "task": "investigate_customer",
+        "next_task": "aggregate_customer_facts",
+        "facts": {
+            "claimed_order_id": order_id,
+            "customer_id": customer_id,
+            "customer_unique_id": customer_unique_id,
+            "related_order_ids": related_order_ids,
+            "related_order_count": related_order_count,
+            "has_related_orders": related_order_count > 0,
+        },
+    }
+
+
+def _order_product_adapter(ticket: dict[str, Any], repository: object) -> dict[str, Any]:
+    """Adapt Member 2 order/product facts while preserving full source counts."""
+
+    raw = investigate_order_and_product(ticket, repository)
+    if not isinstance(raw, dict) or not raw or raw.get("next_task") == "aggregate_order_product_facts":
+        return raw
+    order_id = ticket["customer_request"]["claimed_order_id"]
+    order = repository.get_order(order_id)
+    if not isinstance(order, dict):
+        raise ContractError("order/product adapter cannot load the claimed order")
+    raw_items = _repository_rows(repository, "get_order_items", "order_items", order_id)
+    item_facts: list[dict[str, Any]] = []
+    for item in raw_items:
+        product_id = str(item["product_id"])
+        product = repository.get_product(product_id)
+        category = None
+        if isinstance(product, dict):
+            category_source = product.get("product_category_name")
+            category = repository.translate_category(category_source) if category_source else None
+        item_facts.append({
+            "order_id": order_id,
+            "order_item_id": str(item["order_item_id"]),
+            "product_id": product_id,
+            "seller_id": str(item["seller_id"]),
+            "price_raw": item.get("price", 0),
+            "freight_value_raw": item.get("freight_value", 0),
+            "shipping_limit_date": item.get("shipping_limit_date") or None,
+            "category_name": category,
+        })
+    seller_ids = list(dict.fromkeys(item["seller_id"] for item in item_facts))
+    product_ids = list(dict.fromkeys(item["product_id"] for item in item_facts))
+    category_names = list(dict.fromkeys(item["category_name"] for item in item_facts if item["category_name"] is not None))
+    return {
+        **raw,
+        "task": "investigate_order_and_product",
+        "next_task": "aggregate_order_product_facts",
+        "facts": {
+            "order_id": order_id,
+            "order_status": order.get("order_status"),
+            "customer_id": order.get("customer_id"),
+            "item_ids": [f"{item['order_id']}:{item['order_item_id']}" for item in item_facts[:5]],
+            "seller_ids": seller_ids[:3],
+            "product_ids": product_ids[:5],
+            "category_names": category_names[:5],
+            "item_count": len(item_facts),
+            "seller_count": len(seller_ids),
+            "product_count": len(product_ids),
+            "category_count": len(category_names),
+            "items": item_facts,
+        },
+    }
+
+
+def _payment_adapter(ticket: dict[str, Any], repository: object) -> dict[str, Any]:
+    """Adapt Member 3 payment result to the central reconciliation contract."""
+
+    raw = investigate_payment(ticket, repository)
+    if not isinstance(raw, dict) or not raw or raw.get("next_task") == "aggregate_payment_facts":
+        return raw
+    order_id = ticket["customer_request"]["claimed_order_id"]
+    payments = _repository_rows(repository, "get_order_payments", "order_payments", order_id)
+    items = _repository_rows(repository, "get_order_items", "order_items", order_id)
+    payment_total = round(sum(float(row.get("payment_value", 0)) for row in payments), 2)
+    item_total = round(sum(float(row.get("price", 0)) for row in items), 2)
+    freight_total = round(sum(float(row.get("freight_value", 0)) for row in items), 2)
+    expected_total = round(item_total + freight_total, 2) if items else None
+    difference = round(payment_total - expected_total, 2) if expected_total is not None else None
+    payment_types = list(dict.fromkeys(str(row.get("payment_type")) for row in payments if row.get("payment_type") is not None))
+    payment_ids = [f"{order_id}:{row['payment_sequential']}" for row in payments[:5]]
+    return {
+        **raw,
+        "from_agent": AgentName.PAYMENT.value,
+        "task": "investigate_payment",
+        "next_task": "aggregate_payment_facts",
+        "facts": {
+            "order_id": order_id,
+            "payment_ids": payment_ids,
+            "payment_count": len(payments),
+            "payment_types": payment_types,
+            "item_total_brl": item_total,
+            "freight_total_brl": freight_total,
+            "expected_total_brl": expected_total,
+            "payment_total_brl": payment_total,
+            "difference_brl": difference,
+            "reconciled": abs(difference) <= 0.10 if difference is not None else None,
+        },
+    }
+
+
+def _delivery_adapter(ticket: dict[str, Any], repository: object) -> dict[str, Any]:
+    """Adapt Member 3 delivery result to the shared delivery contract."""
+
+    raw = investigate_delivery(ticket, repository)
+    if not isinstance(raw, dict) or not raw or raw.get("next_task") == "aggregate_delivery_facts":
+        return raw
+    order_id = ticket["customer_request"]["claimed_order_id"]
+    facts = dict(raw["facts"])
+    facts["order_id"] = order_id
+    facts["seller_handoff_analysis"] = list(facts.get("seller_handoff_analysis", []))[:3]
+    facts["late_handoff_seller_ids"] = [
+        row["seller_id"] for row in facts["seller_handoff_analysis"] if row.get("late_handoff") is True
+    ]
+    return {
+        **raw,
+        "from_agent": AgentName.DELIVERY.value,
+        "task": "investigate_delivery",
+        "next_task": "aggregate_delivery_facts",
+        "facts": facts,
+    }
+
+
+def _policy_input(facts: AggregatedFacts) -> dict[str, Any]:
+    """Project shared typed facts to Member 4's stable policy-engine input."""
+
+    late_values = [entry.late_handoff for entry in facts.delivery.seller_handoff_analysis]
+    late_handoff = True if any(value is True for value in late_values) else (None if any(value is None for value in late_values) else False)
+    return {
+        "order_id": facts.order_product.order_id,
+        "order_status": facts.order_product.order_status,
+        "payment_total_brl": float(facts.payment.payment_total_brl),
+        "payment_count": facts.payment.payment_count,
+        "reconciled": facts.payment.reconciled,
+        "freight_total_brl": float(facts.payment.freight_total_brl),
+        "late_handoff": late_handoff,
+        "late_handoff_seller_ids": list(facts.delivery.late_handoff_seller_ids),
+        "delivery_variance_hours": float(facts.delivery.delivery_variance_hours) if facts.delivery.delivery_variance_hours is not None else None,
+        "item_count": facts.order_product.item_count,
+        "seller_count": facts.order_product.seller_count,
+        "category_count": facts.order_product.category_count,
+        "related_order_ids": list(facts.customer.related_order_ids),
+        "evidence_ids": list(facts.source_evidence_ids),
+    }
+
+
+def _policy_adapter(aggregated_facts: dict[str, Any]) -> dict[str, Any]:
+    """Wrap Member 4's plain decision as the standard Policy Agent handoff."""
+
+    ticket = Ticket.from_dict(aggregated_facts["ticket"])
+    customer = CustomerFacts.from_dict(aggregated_facts["customer"])
+    order_product = OrderProductFacts.from_dict(aggregated_facts["order_product"])
+    payment = PaymentFacts.from_dict(aggregated_facts["payment"], item_count=order_product.item_count)
+    delivery = DeliveryFacts.from_dict(aggregated_facts["delivery"])
+    source_evidence = tuple(aggregated_facts.get("source_evidence_ids", []))
+    missing = tuple(aggregated_facts.get("missing_or_conflicting_data", []))
+    facts = AggregatedFacts(ticket, customer, order_product, payment, delivery, source_evidence, missing)
+    decision = apply_policy(aggregated_facts)
+    if isinstance(decision, dict) and decision.get("from_agent") == AgentName.POLICY.value:
+        return decision
+    ranked_causes = decision["root_cause_analysis"]["ranked_causes"]
+    return {
+        "case_id": ticket.case_id,
+        "from_agent": AgentName.POLICY.value,
+        "to_agent": AgentName.COORDINATOR.value,
+        "task": "apply_ec_policy_v2",
+        "facts": {
+            "primary_issue": decision["primary_issue"],
+            "secondary_issues": decision["secondary_issues"],
+            "case_status": decision["case_status"],
+            "confidence": 1.0,
+            "ranked_causes": ranked_causes,
+            "responsible_parties": decision["root_cause_analysis"]["responsible_parties"],
+            "recommended_refund_brl": decision["financial_resolution"]["recommended_refund_brl"],
+            "resolution_actions": decision["resolution_actions"],
+            "policy_evidence_id": f"policy:{ranked_causes[0]['cause_code']}",
+        },
+        "evidence_ids": [f"policy:{ranked_causes[0]['cause_code']}"],
+        "missing_or_conflicting_data": [],
+        "next_task": "assemble_and_verify_output",
+    }
+
+
+def _verifier_facts(facts: AggregatedFacts, repository: object) -> dict[str, Any]:
+    """Give Verifier raw source rows so it can recompute independently."""
+
+    order_id = facts.ticket.customer_request.claimed_order_id
+    get_order = getattr(repository, "get_order", None)
+    if not callable(get_order):
+        # Enables coordinator contract tests that intentionally supply a bare
+        # repository while mocking the verifier itself.
+        return facts.to_dict()
+    order = get_order(order_id)
+    if not isinstance(order, dict):
+        raise ContractError("verifier cannot retrieve the claimed order")
+    return {
+        "case_id": facts.ticket.case_id,
+        "order": order,
+        "items": _repository_rows(repository, "get_order_items", "order_items", order_id),
+        "payments": _repository_rows(repository, "get_order_payments", "order_payments", order_id),
+        "customer": facts.customer.to_dict(),
+        "category_names": list(facts.order_product.category_names),
+    }
+
+
 def _validate_source_evidence(facts: AggregatedFacts) -> None:
     order_id = facts.ticket.customer_request.claimed_order_id
     allowed_items = {f"item:{item.order_id}:{item.order_item_id}" for item in facts.order_product.items}
@@ -227,10 +466,10 @@ def process_case(ticket: Ticket | Mapping[str, Any], repository: object, trace: 
     try:
         ticket_dict = parsed_ticket.to_dict()
         handoffs = {
-            AgentName.CUSTOMER.value: _run_stage(Stage.CUSTOMER, AgentName.CUSTOMER, investigate_customer, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
-            AgentName.ORDER_PRODUCT.value: _run_stage(Stage.ORDER_PRODUCT, AgentName.ORDER_PRODUCT, investigate_order_and_product, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
-            AgentName.PAYMENT.value: _run_stage(Stage.PAYMENT, AgentName.PAYMENT, investigate_payment, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
-            AgentName.DELIVERY.value: _run_stage(Stage.DELIVERY, AgentName.DELIVERY, investigate_delivery, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
+            AgentName.CUSTOMER.value: _run_stage(Stage.CUSTOMER, AgentName.CUSTOMER, _customer_adapter, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
+            AgentName.ORDER_PRODUCT.value: _run_stage(Stage.ORDER_PRODUCT, AgentName.ORDER_PRODUCT, _order_product_adapter, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
+            AgentName.PAYMENT.value: _run_stage(Stage.PAYMENT, AgentName.PAYMENT, _payment_adapter, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
+            AgentName.DELIVERY.value: _run_stage(Stage.DELIVERY, AgentName.DELIVERY, _delivery_adapter, ticket_dict, repository, case_id=case_id, durations=durations, trace=trace),
         }
         facts = _aggregate(parsed_ticket, handoffs)
     except _StageFailure as exc:
@@ -240,7 +479,7 @@ def process_case(ticket: Ticket | Mapping[str, Any], repository: object, trace: 
     except Exception as exc:
         return RunResult.blocked(case_id, [_error("AGENT_EXECUTION_FAILED", Stage.ASSEMBLY, str(exc))], durations)
     try:
-        policy_handoff = _run_stage(Stage.POLICY, AgentName.POLICY, apply_policy, facts.to_dict(), case_id=case_id, durations=durations, trace=trace)
+        policy_handoff = _run_stage(Stage.POLICY, AgentName.POLICY, _policy_adapter, facts.to_dict(), case_id=case_id, durations=durations, trace=trace)
         decision = PolicyDecision.from_dict(policy_handoff.facts)
         if decision.policy_evidence_id not in policy_handoff.evidence_ids:
             raise ContractError("policy handoff must contain its decision evidence")
@@ -258,7 +497,7 @@ def process_case(ticket: Ticket | Mapping[str, Any], repository: object, trace: 
         return RunResult.blocked(case_id, [_error("OUTPUT_ASSEMBLY_FAILED", Stage.ASSEMBLY, f"{type(exc).__name__}: {exc}")], durations)
     try:
         started = time.perf_counter()
-        verifier_errors = verify_output(output, facts.to_dict(), repository)
+        verifier_errors = verify_output(output, _verifier_facts(facts, repository), repository)
         durations[Stage.VERIFICATION.value] = round((time.perf_counter() - started) * 1000, 3)
         if not isinstance(verifier_errors, list):
             raise ContractError("verifier must return a list of errors")

@@ -138,6 +138,17 @@ class OlistRepository:
     def get_order_items(self, order_id: str) -> list[dict[str, Any]]:
         return self.order_items.get(order_id, [])
 
+    def get_order_payments(self, order_id: str) -> list[dict[str, Any]]:
+        return self.order_payments.get(order_id, [])
+
+    # Compatibility aliases keep specialist agents on the shared in-memory index
+    # instead of lazily re-reading the same CSV files.
+    def get_items(self, order_id: str) -> list[dict[str, Any]]:
+        return self.get_order_items(order_id)
+
+    def get_payments(self, order_id: str) -> list[dict[str, Any]]:
+        return self.get_order_payments(order_id)
+
     def get_product(self, product_id: str) -> dict[str, str] | None:
         return self.products.get(product_id)
 
@@ -148,3 +159,15 @@ class OlistRepository:
         if not category_name_pt:
             return None
         return self.category_translation.get(category_name_pt, category_name_pt)
+
+    def has_order(self, order_id: str) -> bool:
+        return order_id in self.orders
+
+    def has_item(self, order_id: str, order_item_id: str) -> bool:
+        return any(str(item.get("order_item_id")) == str(order_item_id) for item in self.get_order_items(order_id))
+
+    def has_payment(self, order_id: str, payment_sequential: str) -> bool:
+        return any(str(payment.get("payment_sequential")) == str(payment_sequential) for payment in self.get_order_payments(order_id))
+
+    def has_seller(self, seller_id: str) -> bool:
+        return seller_id in self.sellers

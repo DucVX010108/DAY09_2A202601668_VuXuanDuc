@@ -278,6 +278,36 @@ def _build_evidence_ids(
     return base[:20]
 
 
+def _normalise_aggregated_facts(facts: dict[str, Any]) -> dict[str, Any]:
+    """Accept Coordinator's typed aggregate without changing the flat M4 API."""
+
+    if "order_product" not in facts or "payment" not in facts or "delivery" not in facts:
+        return facts
+    order_product = facts["order_product"]
+    payment = facts["payment"]
+    delivery = facts["delivery"]
+    customer = facts["customer"]
+    seller_analysis = delivery.get("seller_handoff_analysis", [])
+    late_values = [entry.get("late_handoff") for entry in seller_analysis if isinstance(entry, dict)]
+    late_handoff = True if any(value is True for value in late_values) else (None if any(value is None for value in late_values) else False)
+    return {
+        "order_id": order_product["order_id"],
+        "order_status": order_product["order_status"],
+        "payment_total_brl": payment["payment_total_brl"],
+        "payment_count": payment["payment_count"],
+        "reconciled": payment["reconciled"],
+        "freight_total_brl": payment["freight_total_brl"],
+        "late_handoff": late_handoff,
+        "late_handoff_seller_ids": delivery["late_handoff_seller_ids"],
+        "delivery_variance_hours": delivery["delivery_variance_hours"],
+        "item_count": order_product["item_count"],
+        "seller_count": order_product["seller_count"],
+        "category_count": order_product["category_count"],
+        "related_order_ids": customer["related_order_ids"],
+        "evidence_ids": facts.get("source_evidence_ids", []),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -305,6 +335,7 @@ def apply_policy(facts: dict[str, Any]) -> dict[str, Any]:
         If required fields are missing or no policy branch can be determined.
         M1/M5 must log this and treat the case as a data error.
     """
+    facts = _normalise_aggregated_facts(facts)
     _validate_required_fields(facts)
 
     primary_issue = _resolve_primary_issue(facts)
